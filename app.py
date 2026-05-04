@@ -1,9 +1,12 @@
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+
 import joblib
 import numpy as np
 import re
+import os
 from urllib.parse import urlparse
 
 # -------------------------------
@@ -11,7 +14,7 @@ from urllib.parse import urlparse
 # -------------------------------
 app = FastAPI()
 
-# Enable CORS (important for frontend later)
+# Enable CORS (important for frontend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,7 +52,7 @@ class InputData(BaseModel):
     sms: str
 
 # -------------------------------
-# URL FEATURE ENGINEERING (12 FEATURES)
+# URL FEATURE ENGINEERING
 # -------------------------------
 def extract_url_features(url):
     parsed = urlparse(url)
@@ -70,53 +73,15 @@ def extract_url_features(url):
     ]
 
 # -------------------------------
-# EXPLAINABILITY FUNCTION
-# -------------------------------
-def generate_explanation(url, sms, url_prob, sms_prob, final_score):
-    explanation = []
-
-    # URL reasoning
-    suspicious_keywords = ["login", "verify", "bank", "secure", "account"]
-    if any(k in url.lower() for k in suspicious_keywords):
-        explanation.append("URL contains phishing-related keywords.")
-
-    if "http://" in url:
-        explanation.append("URL is not secure (HTTP instead of HTTPS).")
-
-    if len(url) > 50:
-        explanation.append("URL is unusually long and may be obfuscated.")
-
-    # SMS reasoning
-    sms_keywords = ["urgent", "click", "verify", "account", "password", "now", "locked"]
-    if any(k in sms.lower() for k in sms_keywords):
-        explanation.append("SMS contains high-risk phishing language.")
-
-    # Contribution reasoning
-    if url_prob > sms_prob:
-        explanation.append("URL contributed more to the final decision.")
-    else:
-        explanation.append("SMS contributed more to the final decision.")
-
-    # Confidence reasoning
-    if final_score > 0.8:
-        explanation.append("Overall risk is very high.")
-    elif final_score > 0.5:
-        explanation.append("Moderate risk detected.")
-    else:
-        explanation.append("Low risk detected.")
-
-    # fallback
-    if not explanation:
-        explanation.append("No significant phishing indicators detected.")
-
-    return explanation
-
-# -------------------------------
-# ROOT ENDPOINT
+# UI ROUTES
 # -------------------------------
 @app.get("/")
 def home():
-    return {"message": "Phishing Detection API Running"}
+    return FileResponse(os.path.join(os.getcwd(), "index.html"))
+
+@app.get("/ui")
+def serve_ui():
+    return FileResponse(os.path.join(os.getcwd(), "index.html"))
 
 # -------------------------------
 # PREDICTION ENDPOINT
@@ -124,20 +89,33 @@ def home():
 @app.post("/predict")
 def predict(data: InputData):
     try:
+        explanations = []
+
         # ---------------------------
         # URL PROCESSING
         # ---------------------------
         if is_trusted(data.url):
             url_prob = 0.0
+            explanations.append("Trusted domain detected")
         else:
             url_features = np.array([extract_url_features(data.url)])
             url_prob = url_model.predict_proba(url_features)[0][1]
+
+            if "http://" in data.url:
+                explanations.append("Uses insecure HTTP")
+            if any(k in data.url.lower() for k in ["login","bank","verify"]):
+                explanations.append("Sensitive keywords in URL")
+            if len(data.url) > 75:
+                explanations.append("Unusually long URL")
 
         # ---------------------------
         # SMS PROCESSING
         # ---------------------------
         sms_features = vectorizer.transform([data.sms])
         sms_prob = sms_model.predict_proba(sms_features)[0][1]
+
+        if any(k in data.sms.lower() for k in ["urgent", "click", "account", "verify"]):
+            explanations.append("Suspicious SMS language")
 
         # ---------------------------
         # FUSION
@@ -147,20 +125,13 @@ def predict(data: InputData):
 
         decision = "phishing" if final_score >= THRESHOLD else "legitimate"
 
-        # ---------------------------
-        # EXPLANATION
-        # ---------------------------
-        explanation = generate_explanation(
-            data.url, data.sms, url_prob, sms_prob, final_score
-        )
-
         return {
             "url_score": float(url_prob),
             "sms_score": float(sms_prob),
             "final_score": float(final_score),
             "threshold": THRESHOLD,
             "decision": decision,
-            "explanation": explanation
+            "explanations": explanations
         }
 
     except Exception as e:
