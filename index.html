@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Threat Analyzer</title>
+
+<style>
+:root{
+    --bg:#020617;
+    --card:#0f172a;
+    --accent:#6366f1;
+    --accent2:#a855f7;
+    --safe:#22c55e;
+    --danger:#ef4444;
+}
+
+body{
+    margin:0;
+    font-family: Inter, sans-serif;
+    background: radial-gradient(circle at top, #0f172a, #020617);
+    color:white;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+}
+
+/* layout */
+.wrapper{
+    width:900px;
+    display:flex;
+    gap:20px;
+}
+
+/* left panel */
+.panel{
+    flex:1;
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(20px);
+    border-radius:20px;
+    padding:25px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.6);
+}
+
+/* inputs */
+input{
+    width:100%;
+    padding:14px;
+    margin:10px 0;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.05);
+    color:white;
+}
+
+button{
+    width:100%;
+    padding:14px;
+    border:none;
+    border-radius:10px;
+    background: linear-gradient(135deg,var(--accent),var(--accent2));
+    color:white;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+/* right panel */
+.result{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    gap:20px;
+}
+
+/* gauge */
+.gauge{
+    height:150px;
+    background: rgba(255,255,255,0.05);
+    border-radius:20px;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    font-size:30px;
+    font-weight:bold;
+}
+
+/* status */
+.status{
+    padding:15px;
+    border-radius:10px;
+    text-align:center;
+    font-weight:bold;
+}
+
+/* breakdown */
+.breakdown{
+    padding:15px;
+    border-radius:10px;
+    background: rgba(255,255,255,0.05);
+}
+
+.bar{
+    height:6px;
+    background: rgba(255,255,255,0.1);
+    border-radius:10px;
+    margin-top:5px;
+    overflow:hidden;
+}
+
+.fill{
+    height:100%;
+    background: linear-gradient(90deg,var(--accent),var(--accent2));
+    width:0%;
+    transition:0.6s;
+}
+
+/* explanation */
+.explain{
+    font-size:13px;
+    color:#94a3b8;
+    line-height:1.5;
+}
+</style>
+</head>
+
+<body>
+
+<div class="wrapper">
+
+<!-- INPUT PANEL -->
+<div class="panel">
+    <h2>🔐 Threat Analyzer</h2>
+
+    <input id="url" placeholder="Enter URL">
+    <input id="sms" placeholder="Enter SMS message">
+
+    <button onclick="analyze()">Analyze Threat</button>
+</div>
+
+<!-- RESULT PANEL -->
+<div class="result">
+
+    <div id="gauge" class="gauge">--%</div>
+
+    <div id="status" class="status"></div>
+
+    <div class="breakdown">
+        <div>URL Risk</div>
+        <div class="bar"><div id="urlBar" class="fill"></div></div>
+
+        <div style="margin-top:10px;">SMS Risk</div>
+        <div class="bar"><div id="smsBar" class="fill"></div></div>
+    </div>
+
+    <div id="explain" class="explain"></div>
+
+</div>
+
+</div>
+
+<script>
+async function analyze(){
+    const url = document.getElementById("url").value;
+    const sms = document.getElementById("sms").value;
+
+    const res = await fetch("http://127.0.0.1:8000/predict", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({url, sms})
+    });
+
+    const data = await res.json();
+
+    const score = data.final_score;
+
+    document.getElementById("gauge").innerText =
+        (score*100).toFixed(1) + "%";
+
+    // status
+    const status = document.getElementById("status");
+    if(data.decision === "phishing"){
+        status.innerText = "🚨 PHISHING DETECTED";
+        status.style.background = "rgba(239,68,68,0.2)";
+        status.style.color = "#ef4444";
+    } else {
+        status.innerText = "✅ SAFE";
+        status.style.background = "rgba(34,197,94,0.2)";
+        status.style.color = "#22c55e";
+    }
+
+    // bars
+    document.getElementById("urlBar").style.width =
+        (data.url_score*100) + "%";
+
+    document.getElementById("smsBar").style.width =
+        (data.sms_score*100) + "%";
+
+    // explanation (simple AI-style reasoning)
+    let explanation = "";
+
+    if(data.url_score > 0.7){
+        explanation += "• URL shows strong phishing patterns (keywords or suspicious domain).<br>";
+    }
+    if(data.sms_score > 0.5){
+        explanation += "• SMS contains high-risk language often used in scams.<br>";
+    }
+    if(explanation === ""){
+        explanation = "• No significant phishing indicators detected.";
+    }
+
+    document.getElementById("explain").innerHTML = explanation;
+}
+</script>
+
+</body>
+</html>
