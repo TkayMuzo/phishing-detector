@@ -14,7 +14,9 @@ from urllib.parse import urlparse
 # -------------------------------
 app = FastAPI()
 
-# Enable CORS
+# -------------------------------
+# ENABLE CORS
+# -------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,7 +35,7 @@ vectorizer = joblib.load("model/tfidf_vectorizer.pkl")
 THRESHOLD = 0.2
 
 # -------------------------------
-# TRUSTED DOMAIN CHECK
+# TRUSTED DOMAINS
 # -------------------------------
 trusted_domains = [
     "google.com",
@@ -46,11 +48,24 @@ trusted_domains = [
     "github.com"
 ]
 
+# -------------------------------
+# TRUST CHECK
+# -------------------------------
 def is_trusted(url):
+
+    url = url.lower().strip()
+
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
     parsed = urlparse(url)
+
     domain = parsed.netloc.lower()
 
-    return any(td in domain for td in trusted_domains)
+    return any(
+        domain == td or domain.endswith("." + td)
+        for td in trusted_domains
+    )
 
 # -------------------------------
 # INPUT SCHEMA
@@ -60,9 +75,10 @@ class InputData(BaseModel):
     sms: str
 
 # -------------------------------
-# URL FEATURE ENGINEERING
+# URL FEATURES
 # -------------------------------
 def extract_url_features(url):
+
     parsed = urlparse(url)
 
     return [
@@ -76,9 +92,10 @@ def extract_url_features(url):
         url.count('www'),
         1 if parsed.scheme == 'https' else 0,
         1 if re.match(r"^\d+\.\d+\.\d+\.\d+", parsed.netloc) else 0,
-        1 if any(k in url.lower()
-                 for k in ["login", "verify", "bank", "secure", "account"])
-        else 0,
+        1 if any(
+            k in url.lower()
+            for k in ["login", "verify", "bank", "secure", "account"]
+        ) else 0,
         len(parsed.netloc)
     ]
 
@@ -87,57 +104,107 @@ def extract_url_features(url):
 # -------------------------------
 @app.get("/")
 def home():
-    return FileResponse(os.path.join(os.getcwd(), "index.html"))
+    return FileResponse(
+        os.path.join(os.getcwd(), "index.html")
+    )
 
 @app.get("/ui")
 def serve_ui():
-    return FileResponse(os.path.join(os.getcwd(), "index.html"))
+    return FileResponse(
+        os.path.join(os.getcwd(), "index.html")
+    )
+
+# -------------------------------
+# API HEALTH CHECK
+# -------------------------------
+@app.get("/health")
+def health():
+    return {"status": "running"}
 
 # -------------------------------
 # PREDICTION ENDPOINT
 # -------------------------------
 @app.post("/predict")
 def predict(data: InputData):
+
     try:
 
         explanations = []
 
         # ---------------------------
-        # URL PROCESSING
+        # NORMALIZE URL
         # ---------------------------
-        if not data.url.strip():
-            url_prob = 0.0
-            explanations.append("No URL provided.")
+        url = data.url.strip()
 
-        elif is_trusted(data.url):
+        if url and not url.startswith(
+            ("http://", "https://")
+        ):
+            url = "https://" + url
+
+        # ---------------------------
+        # URL ANALYSIS
+        # ---------------------------
+        if not url:
+
             url_prob = 0.0
-            explanations.append("Trusted domain detected.")
+            explanations.append(
+                "No URL was provided."
+            )
+
+        elif is_trusted(url):
+
+            url_prob = 0.0
+
+            explanations.append(
+                "Trusted domain detected."
+            )
 
         else:
-            url_features = np.array([extract_url_features(data.url)])
-            url_prob = url_model.predict_proba(url_features)[0][1]
 
-            if "http://" in data.url:
-                explanations.append("Uses insecure HTTP.")
+            url_features = np.array(
+                [extract_url_features(url)]
+            )
 
-            if any(
-                k in data.url.lower()
-                for k in ["login", "bank", "verify", "secure", "account"]
-            ):
+            url_prob = (
+                url_model
+                .predict_proba(url_features)[0][1]
+            )
+
+            if "http://" in url:
                 explanations.append(
-                    "URL contains sensitive phishing-related keywords."
+                    "Uses insecure HTTP protocol."
                 )
 
-            if len(data.url) > 75:
+            if any(
+                k in url.lower()
+                for k in [
+                    "login",
+                    "verify",
+                    "bank",
+                    "secure",
+                    "account"
+                ]
+            ):
+                explanations.append(
+                    "URL contains phishing-related keywords."
+                )
+
+            if len(url) > 75:
                 explanations.append(
                     "URL is unusually long and may be obfuscated."
                 )
 
         # ---------------------------
-        # SMS PROCESSING
+        # SMS ANALYSIS
         # ---------------------------
-        sms_features = vectorizer.transform([data.sms])
-        sms_prob = sms_model.predict_proba(sms_features)[0][1]
+        sms_features = vectorizer.transform(
+            [data.sms]
+        )
+
+        sms_prob = (
+            sms_model
+            .predict_proba(sms_features)[0][1]
+        )
 
         if any(
             k in data.sms.lower()
@@ -148,7 +215,10 @@ def predict(data: InputData):
                 "verify",
                 "password",
                 "locked",
-                "suspended"
+                "suspended",
+                "winner",
+                "claim",
+                "bank"
             ]
         ):
             explanations.append(
@@ -156,9 +226,12 @@ def predict(data: InputData):
             )
 
         # ---------------------------
-        # RULE-BASED FUSION
+        # FUSION
         # ---------------------------
-        final_score = max(url_prob, sms_prob)
+        final_score = max(
+            url_prob,
+            sms_prob
+        )
 
         decision = (
             "phishing"
@@ -167,21 +240,29 @@ def predict(data: InputData):
         )
 
         # ---------------------------
-        # MAIN REASON
+        # EXPLAIN MAIN REASON
         # ---------------------------
         if url_prob > sms_prob:
+
             explanations.append(
                 "URL contributed most to the final decision."
             )
+
         elif sms_prob > url_prob:
+
             explanations.append(
                 "SMS contributed most to the final decision."
             )
+
         else:
+
             explanations.append(
                 "URL and SMS contributed equally."
             )
 
+        # ---------------------------
+        # RESPONSE
+        # ---------------------------
         return {
             "url_score": float(url_prob),
             "sms_score": float(sms_prob),
@@ -192,4 +273,7 @@ def predict(data: InputData):
         }
 
     except Exception as e:
-        return {"error": str(e)}
+
+        return {
+            "error": str(e)
+        }
