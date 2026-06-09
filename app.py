@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 # -------------------------------
 app = FastAPI()
 
-# Enable CORS (important for frontend)
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,7 +28,6 @@ app.add_middleware(
 # -------------------------------
 url_model = joblib.load("model/url_model_calibrated.pkl")
 sms_model = joblib.load("model/sms_model_calibrated.pkl")
-fusion_model = joblib.load("model/fusion_model.pkl")
 vectorizer = joblib.load("model/tfidf_vectorizer.pkl")
 
 THRESHOLD = 0.2
@@ -37,12 +36,21 @@ THRESHOLD = 0.2
 # TRUSTED DOMAIN CHECK
 # -------------------------------
 trusted_domains = [
-    "google.com", "youtube.com", "facebook.com",
-    "amazon.com", "microsoft.com", "apple.com"
+    "google.com",
+    "youtube.com",
+    "youtu.be",
+    "facebook.com",
+    "amazon.com",
+    "microsoft.com",
+    "apple.com",
+    "github.com"
 ]
 
 def is_trusted(url):
-    return any(domain in url.lower() for domain in trusted_domains)
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower()
+
+    return any(td in domain for td in trusted_domains)
 
 # -------------------------------
 # INPUT SCHEMA
@@ -68,7 +76,9 @@ def extract_url_features(url):
         url.count('www'),
         1 if parsed.scheme == 'https' else 0,
         1 if re.match(r"^\d+\.\d+\.\d+\.\d+", parsed.netloc) else 0,
-        1 if any(k in url.lower() for k in ["login","verify","bank","secure","account"]) else 0,
+        1 if any(k in url.lower()
+                 for k in ["login", "verify", "bank", "secure", "account"])
+        else 0,
         len(parsed.netloc)
     ]
 
@@ -89,24 +99,39 @@ def serve_ui():
 @app.post("/predict")
 def predict(data: InputData):
     try:
+
         explanations = []
 
         # ---------------------------
         # URL PROCESSING
         # ---------------------------
-        if is_trusted(data.url):
+        if not data.url.strip():
             url_prob = 0.0
-            explanations.append("Trusted domain detected")
+            explanations.append("No URL provided.")
+
+        elif is_trusted(data.url):
+            url_prob = 0.0
+            explanations.append("Trusted domain detected.")
+
         else:
             url_features = np.array([extract_url_features(data.url)])
             url_prob = url_model.predict_proba(url_features)[0][1]
 
             if "http://" in data.url:
-                explanations.append("Uses insecure HTTP")
-            if any(k in data.url.lower() for k in ["login","bank","verify"]):
-                explanations.append("Sensitive keywords in URL")
+                explanations.append("Uses insecure HTTP.")
+
+            if any(
+                k in data.url.lower()
+                for k in ["login", "bank", "verify", "secure", "account"]
+            ):
+                explanations.append(
+                    "URL contains sensitive phishing-related keywords."
+                )
+
             if len(data.url) > 75:
-                explanations.append("Unusually long URL")
+                explanations.append(
+                    "URL is unusually long and may be obfuscated."
+                )
 
         # ---------------------------
         # SMS PROCESSING
@@ -114,16 +139,48 @@ def predict(data: InputData):
         sms_features = vectorizer.transform([data.sms])
         sms_prob = sms_model.predict_proba(sms_features)[0][1]
 
-        if any(k in data.sms.lower() for k in ["urgent", "click", "account", "verify"]):
-            explanations.append("Suspicious SMS language")
+        if any(
+            k in data.sms.lower()
+            for k in [
+                "urgent",
+                "click",
+                "account",
+                "verify",
+                "password",
+                "locked",
+                "suspended"
+            ]
+        ):
+            explanations.append(
+                "SMS contains suspicious phishing language."
+            )
 
         # ---------------------------
-        # FUSION
+        # RULE-BASED FUSION
         # ---------------------------
-        fusion_input = np.array([[url_prob, sms_prob]])
-        final_score = fusion_model.predict_proba(fusion_input)[0][1]
+        final_score = max(url_prob, sms_prob)
 
-        decision = "phishing" if final_score >= THRESHOLD else "legitimate"
+        decision = (
+            "phishing"
+            if final_score >= THRESHOLD
+            else "legitimate"
+        )
+
+        # ---------------------------
+        # MAIN REASON
+        # ---------------------------
+        if url_prob > sms_prob:
+            explanations.append(
+                "URL contributed most to the final decision."
+            )
+        elif sms_prob > url_prob:
+            explanations.append(
+                "SMS contributed most to the final decision."
+            )
+        else:
+            explanations.append(
+                "URL and SMS contributed equally."
+            )
 
         return {
             "url_score": float(url_prob),

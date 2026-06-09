@@ -161,57 +161,119 @@ button{
 
 <script>
 async function analyze(){
-    const url = document.getElementById("url").value;
-    const sms = document.getElementById("sms").value;
 
-    const res = await fetch("https://phishing-detector-53o5.onrender.com/predict", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({url, sms})
-    });
+    try {
 
-    const data = await res.json();
+        const url = document.getElementById("url").value;
+        const sms = document.getElementById("sms").value;
 
-    const score = data.final_score;
+        // Loading state
+        document.getElementById("gauge").innerText = "Analyzing...";
+        document.getElementById("status").innerText = "Processing...";
 
-    document.getElementById("gauge").innerText =
-        (score*100).toFixed(1) + "%";
+        const res = await fetch(
+            "https://phishing-detector-53o5.onrender.com/predict",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    url: url,
+                    sms: sms
+                })
+            }
+        );
 
-    // status
-    const status = document.getElementById("status");
-    if(data.decision === "phishing"){
-        status.innerText = "🚨 PHISHING DETECTED";
-        status.style.background = "rgba(239,68,68,0.2)";
-        status.style.color = "#ef4444";
-    } else {
-        status.innerText = "✅ SAFE";
-        status.style.background = "rgba(34,197,94,0.2)";
-        status.style.color = "#22c55e";
+        const data = await res.json();
+
+        // Debugging
+        console.log("API RESPONSE:", data);
+
+        // If backend returns an error
+        if(data.error){
+            document.getElementById("status").innerText =
+                "⚠️ Backend Error";
+
+            document.getElementById("explain").innerHTML =
+                data.error;
+
+            return;
+        }
+
+        // Score
+        const score = data.final_score;
+
+        document.getElementById("gauge").innerText =
+            (score * 100).toFixed(1) + "%";
+
+        // Status
+        const status = document.getElementById("status");
+
+        if(data.decision === "phishing"){
+
+            status.innerText = "🚨 PHISHING DETECTED";
+            status.style.background =
+                "rgba(239,68,68,0.2)";
+            status.style.color =
+                "#ef4444";
+
+        } else {
+
+            status.innerText = "✅ SAFE";
+            status.style.background =
+                "rgba(34,197,94,0.2)";
+            status.style.color =
+                "#22c55e";
+        }
+
+        // Risk bars
+        document.getElementById("urlBar").style.width =
+            (data.url_score * 100) + "%";
+
+        document.getElementById("smsBar").style.width =
+            (data.sms_score * 100) + "%";
+
+        // AI Explanation
+        let explanation = "";
+
+        if(data.explanations &&
+           data.explanations.length > 0){
+
+            explanation =
+                data.explanations
+                    .map(item => "• " + item)
+                    .join("<br>");
+
+        } else {
+
+            explanation =
+                "• No explanation available.";
+        }
+
+        document.getElementById("explain").innerHTML =
+            explanation;
+
+    } catch(error){
+
+        console.error(error);
+
+        document.getElementById("gauge").innerText =
+            "--";
+
+        document.getElementById("status").innerText =
+            "⚠️ Connection Error";
+
+        document.getElementById("status").style.background =
+            "rgba(239,68,68,0.2)";
+
+        document.getElementById("status").style.color =
+            "#ef4444";
+
+        document.getElementById("explain").innerHTML =
+            "• Could not reach the backend API.";
     }
-
-    // bars
-    document.getElementById("urlBar").style.width =
-        (data.url_score*100) + "%";
-
-    document.getElementById("smsBar").style.width =
-        (data.sms_score*100) + "%";
-
-    // explanation (simple AI-style reasoning)
-    let explanation = "";
-
-    if(data.url_score > 0.7){
-        explanation += "• URL shows strong phishing patterns (keywords or suspicious domain).<br>";
-    }
-    if(data.sms_score > 0.5){
-        explanation += "• SMS contains high-risk language often used in scams.<br>";
-    }
-    if(explanation === ""){
-        explanation = "• No significant phishing indicators detected.";
-    }
-
-    document.getElementById("explain").innerHTML = explanation;
 }
-</script>
-
+    </script>
 </body>
 </html>
